@@ -39,13 +39,13 @@ The radio body and detachable front panel communicate over an 8-pin cable. The s
 | Pin | Signal | Notes |
 |---:|---|---|
 | 1 | Microphone | Analog microphone path. |
-| 2 | GND | Common ground. |
+| 2 | AUDIO GND | Audio ground. |
 | 3 | Speaker | Analog speaker/audio path. |
 | 4 | UNKNOWN | Not mapped yet. |
 | 5 | +13 V | Radio supply line. Treat as power, not logic. |
 | 6 | Data: front panel → radio body | 3.3 V TTL UART, 500000 baud. |
 | 7 | Data: radio body → front panel | 3.3 V TTL UART, 500000 baud. |
-| 8 | UNKNOWN | Not mapped yet. |
+| 8 | GND | Common ground. |
 
 Recommended full-duplex test wiring with one USB-TTL adapter:
 
