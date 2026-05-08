@@ -41,7 +41,7 @@ The radio body and detachable front panel communicate over an 8-pin cable. The s
 | 1 | Microphone | Analog microphone path. |
 | 2 | AUDIO GND | Audio ground. |
 | 3 | Speaker | Analog speaker/audio path. |
-| 4 | UNKNOWN | Not mapped yet. |
+| 4 | +3.3V | Not used (?). |
 | 5 | +13 V | Radio supply line. Treat as power, not logic. |
 | 6 | Data: front panel → radio body | 3.3 V TTL UART, 500000 baud. |
 | 7 | Data: radio body → front panel | 3.3 V TTL UART, 500000 baud. |
