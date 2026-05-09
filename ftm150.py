@@ -326,7 +326,31 @@ class PanelTx:
         # can coexist without one release clearing the other.
         self.named_holds: Dict[str, State] = {}
         self.stop = threading.Event()
+        # TX writer gate.  When the radio is OFF there is no reason to keep
+        # pushing 210-byte idle frames into the USB serial adapter.  The power
+        # watchdog enables this again as soon as the radio wakes up.
+        self.tx_enabled = threading.Event()
+        self.tx_enabled.set()
         self.frames_sent = 0
+
+    def set_enabled(self, enabled: bool, reason: str = "") -> None:
+        """Enable/disable continuous panel->body frame transmission."""
+        enabled = bool(enabled)
+        was = self.tx_enabled.is_set()
+        if enabled:
+            self.tx_enabled.set()
+        else:
+            self.tx_enabled.clear()
+        if was != enabled:
+            state = "ON" if enabled else "OFF"
+            suffix = f" ({reason})" if reason else ""
+            print(f"[tx] continuous TX {state}{suffix}")
+        # Drop any stale bytes still buffered by the OS/USB driver when changing
+        # state, so the line does not get old frames after the mux reconnects.
+        try:
+            self.ser.reset_output_buffer()
+        except Exception:
+            pass
 
     def pulse(self, label: str, ops: State, frames: int) -> None:
         with self.lock:
@@ -396,6 +420,11 @@ class PanelTx:
         last_report = time.monotonic()
         last_count = 0
         while not self.stop.is_set():
+            if not self.tx_enabled.is_set():
+                # Radio OFF: do not send idle frames into the USB serial adapter.
+                # Sleep via Event.wait so re-enable is immediate.
+                self.tx_enabled.wait(0.05)
+                continue
             frame = self.current_frame()
             try:
                 self.ser.write(frame)
@@ -3219,8 +3248,16 @@ function setupMomentaryButton(id,command){
 } 
 
 function applyPowerState(j){
+  const wasPowered=radioPowered;
   radioPowered=!!(j&&j.radio_powered);
   powerBusy=!!(j&&j.powering_on);
+  if(wasPowered && !radioPowered){
+    // Radio really went OFF according to RX watchdog: stop browser-side RX audio
+    // so START AUDIO returns to the inactive state automatically.
+    if(audioCtl) stopAudio(true);
+    if(txCtl) stopTxAudio(true);
+    releaseAllHeldKeepalive();
+  }
   document.body.classList.toggle('radio-off',!radioPowered);
   document.body.classList.toggle('powering-on',powerBusy);
   document.querySelectorAll('button').forEach(btn=>{
@@ -8777,6 +8814,8 @@ class WebContext:
                 print(f"[power] radio spenta: S GPIO{self.uart_select_gpio}=LOW, selezionata linea GPIO replay")
             else:
                 print(f"[power] ATTENZIONE: non riesco a impostare S GPIO{self.uart_select_gpio}: {msg}", file=sys.stderr)
+        if self.tx is not None:
+            self.tx.set_enabled(bool(self.radio_powered or self.demo), "stato iniziale radio")
         self._power_watchdog_thread = threading.Thread(target=self._power_watchdog_loop, name="power-watchdog", daemon=True)
         self._power_watchdog_thread.start()
 
@@ -9361,6 +9400,38 @@ class WebContext:
         print(f"[startup-sync-removed] applied baseline: {settings or 'none'}")
         return settings
 
+    def _handle_radio_power_lost(self, reason: str = "") -> None:
+        """Stop local sessions and continuous TX when the RX watchdog says OFF."""
+        if self.tx is not None:
+            try:
+                self.tx.release()
+            except Exception:
+                pass
+            try:
+                self.tx.set_enabled(False, reason or "radio spenta")
+            except Exception:
+                pass
+        # If browser TX audio/PTT was active, force it off too.  RX browser audio
+        # is stopped by the web UI when it sees radio_powered=false.
+        try:
+            self.stop_tx_audio_session()
+        except Exception:
+            pass
+        if self.ptt is not None:
+            try:
+                self.ptt.set_ptt(False)
+            except Exception:
+                pass
+        self.ptt_latched = False
+
+    def _handle_radio_power_alive(self, reason: str = "") -> None:
+        """Allow normal continuous TX after RX frames prove the radio is alive."""
+        if self.tx is not None:
+            try:
+                self.tx.set_enabled(True, reason or "radio accesa")
+            except Exception:
+                pass
+
     def _rx_power_info(self) -> Tuple[bool, Optional[float], int]:
         """Return (alive, age_seconds, frame_count) from the RX-frame watchdog."""
         if self.demo:
@@ -9408,18 +9479,16 @@ class WebContext:
         if changed:
             if alive:
                 ok, msg = self._set_uart_select_usb(True)
+                self._handle_radio_power_alive("RX frame rilevati")
                 if ok:
-                    print(f"[power] RX frame rilevati: radio ON, S GPIO{self.uart_select_gpio}=HIGH")
+                    print(f"[power] RX frame rilevati: radio ON, S GPIO{self.uart_select_gpio}=HIGH, TX continuo ON")
                 else:
                     print(f"[power] errore selezione TX USB dopo RX alive: {msg}", file=sys.stderr)
             else:
-                try:
-                    self.release()
-                except Exception:
-                    pass
+                self._handle_radio_power_lost("RX fermo")
                 ok, msg = self._set_uart_select_usb(False)
                 if ok:
-                    print(f"[power] RX fermo: radio OFF, S GPIO{self.uart_select_gpio}=LOW")
+                    print(f"[power] RX fermo: radio OFF, S GPIO{self.uart_select_gpio}=LOW, TX continuo OFF")
                 else:
                     print(f"[power] errore isolamento TX USB dopo RX stop: {msg}", file=sys.stderr)
         return alive
@@ -9478,6 +9547,10 @@ class WebContext:
                     self.tx.release()
                 except Exception:
                     pass
+                try:
+                    self.tx.set_enabled(False, "preparo replay accensione")
+                except Exception:
+                    pass
 
             ok, msg = self._set_uart_select_usb(False)
             if not ok:
@@ -9496,6 +9569,11 @@ class WebContext:
             ok, msg = self._set_uart_select_usb(True)
             if not ok:
                 return False, msg, self.power_status()
+            if self.tx is not None:
+                # The radio has just been woken electrically; resume the normal
+                # 210-byte idle frame stream immediately, then the RX watchdog
+                # will confirm power as soon as display frames arrive.
+                self.tx.set_enabled(True, "dopo replay accensione")
 
             deadline = time.time() + 3.0
             while time.time() < deadline:
@@ -9525,6 +9603,7 @@ class WebContext:
             self.radio_powered = False
             self.powering_on = False
             self.power_message = "radio spenta: RX assente, isolo TX USB"
+        self._handle_radio_power_lost("radio spenta manuale/watchdog")
         ok, msg = self._set_uart_select_usb(False)
         if not ok:
             return False, msg, self.power_status()
@@ -9853,9 +9932,10 @@ def web_main() -> int:
         print(f"[open] {args.port} @ {args.baud} 8N1")
         if not args.no_tx:
             tx = PanelTx(ser, verbose=args.verbose)
+            tx.set_enabled(bool(args.radio_start_on), "stato iniziale prima del watchdog")
             tx_th = threading.Thread(target=tx.writer_loop, daemon=True)
             tx_th.start()
-            print("[tx] frame idle pannello→corpo attivo")
+            print("[tx] frame idle pannello→corpo pronto")
         if not args.no_rx:
             rx = BodyRx(ser, enabled=True, verbose=args.verbose, ignore_menu=True)
             rx_th = threading.Thread(target=rx.reader_loop, daemon=True)
