@@ -15,7 +15,7 @@ The map is intentionally conservative: fields that are not understood are docume
 | 3 | Speaker | Analog | Speaker/RX audio. Captured by a USB sound card in this project. |
 | 4 | +3.3V | Power | Not used (?). |
 | 5 | +13 V | Power | Radio supply. Do not connect to TTL or audio inputs. |
-| 6 | Data transmission: front panel → radio body | 3.3 V TTL UART | Panel command stream, called panel→body or TX frame in this document. |
+| 6 | Data transmission: front panel → radio body | 3.3 V TTL UART plus cold-start wake waveform | Panel command stream, called panel→body or TX frame in this document. During cold startup this line is driven by a captured CH2 GPIO replay before normal UART takes over. |
 | 7 | Data transmission: radio body → front panel | 3.3 V TTL UART | Display/status stream, called body→panel or RX frame in this document. |
 | 8 | GND | Ground | Common reference for serial. |
 
@@ -27,7 +27,7 @@ The map is intentionally conservative: fields that are not understood are docume
 - UART byte time is 10 bit-times because the line uses 8N1 framing.
 - Audio is not serialized in these frames. RX/TX audio is analog and is handled separately through a USB audio interface, for example a CM108/CM119 dongle.
 
-### 1.3 Safe test wiring
+### 1.3 Safe test wiring, radio already on
 
 ```text
 USB-TTL TX  -> Pin 6 / radio BODY RX line, preferably through 1 kΩ–4.7 kΩ
@@ -37,14 +37,64 @@ USB-TTL GND -> Pin 2 / GND
 
 Do not leave the original front-panel TX output connected to the same body RX line while the USB-TTL adapter is driving it. Two push-pull TX outputs must not fight each other.
 
+### 1.4 Cold power-on hardware
+
+Cold power-on is not handled by simply sending the normal 210-byte UART frame. The working implementation replays the captured CH2/pin-6 electrical waveform from a Raspberry Pi GPIO, then switches the line back to the USB-TTL TX output for normal UART operation.
+
+A tested wiring uses one channel of a 74LVC157A 2-to-1 multiplexer:
+
+```text
+Raspberry GPIO18  -> 74LVC157A 1I0    # CH2/pin-6 wake waveform replay
+USB-TTL TX        -> 74LVC157A 1I1    # normal panel→body UART
+74LVC157A 1Y      -> radio pin 6 / body RX
+Raspberry GPIO23  -> 74LVC157A S      # LOW=1I0 replay, HIGH=1I1 USB-TTL TX
+74LVC157A /E      -> GND              # output enabled; do not use /E as Hi-Z here
+74LVC157A VCC     -> 3.3 V
+All grounds       -> common GND
+
+USB-TTL RX        <- radio pin 7 / body TX
+```
+
+Use a local 100 nF decoupling capacitor between the 74LVC157A VCC and GND. The USB-TTL TX output should not be directly tied to the same radio pin as the replay GPIO because its idle HIGH push-pull driver can load or fight the replay waveform.
+
+The application defaults are:
+
+| Function | Default BCM GPIO | Meaning |
+|---|---:|---|
+| `--power-gpio` | 18 | Replays the captured CH2/pin-6 waveform. |
+| `--uart-select-gpio` | 23 | Drives the 74LVC157A `S` pin: LOW selects GPIO18 replay, HIGH selects USB-TTL TX. |
+
+After the wake replay, GPIO18 is released as input with pull-up/down disabled, so it is effectively high-impedance. GPIO23 is then driven HIGH to select the normal USB-TTL TX path.
+
 ## 2. UART framing summary
 
 | Direction | Length | Structure | Time at 500000 8N1 | Approx. rate |
 |---|---:|---|---:|---:|
 | Panel → body | 210 bytes | One fixed-length command/idle frame | 4.20 ms | 238.1 frames/s |
-| Body → panel | 1100 bytes | 5 blocks × 220 bytes | 0.02 ms | 45454.5 frames/s |
+| Body → panel | 1100 bytes | 5 blocks × 220 bytes | 22.00 ms | 45.45 frames/s |
 
-The implementation continuously sends panel→body frames. Commands are created by starting from the idle frame and applying one or more byte operations for a defined number of frames.
+The implementation continuously sends panel→body frames once the radio is awake and the USB-TTL TX path is selected. Commands are created by starting from the idle frame and applying one or more byte operations for a defined number of frames.
+
+### 2.1 Cold-start waveform and power-state detection
+
+The captured front-panel startup waveform on CH2/pin 6 is treated as a raw timing waveform, not as a normal UART frame sequence. The working replay starts at the first LOW→HIGH edge of CH2. In the current capture this has these useful landmarks:
+
+| Landmark | Approx. timing from first LOW→HIGH | Notes |
+|---|---:|---|
+| Initial HIGH hold | 666.851 ms | CH2 remains high before the first startup exchange. |
+| Critical replay end | 1452.096 ms | The embedded GPIO replay reproduces the timing-critical part up to this point. |
+| Optional compact tail | about 430 ms | A UART-like repeated 210-byte tail may be sent after the critical replay. |
+
+The software power-on sequence is:
+
+1. Select GPIO replay path with GPIO23 LOW.
+2. Release any active serial command holds.
+3. Replay the embedded CH2 waveform on GPIO18, including the optional compact tail.
+4. Release GPIO18 to input/high-impedance.
+5. Select USB-TTL TX with GPIO23 HIGH.
+6. Wait for valid body→panel RX frames before declaring the radio on.
+
+The GUI does not treat power state as a simple remembered button state. It is driven by an RX-frame watchdog: valid body→panel frames mean on, while no valid RX frames for `--rx-power-timeout` seconds means off. The default timeout is 1.2 seconds.
 
 ## 3. Panel → body frame
 
@@ -107,6 +157,8 @@ Duration syntax accepted by the software:
 | `vm` | `+0005 |= 0x20` | 60 frames / 252.0 ms |
 | `sdx` | `+0007 |= 0x40` | 60 frames / 252.0 ms |
 | `power` | `+0006 |= 0x01` | 120 frames / 504.0 ms |
+
+The `power` command above is the normal panel POWER-key state inside the 210-byte UART frame. It is not sufficient by itself for cold startup from a fully off body; cold startup uses the raw CH2 GPIO replay described in section 2.1.
 
 ### Knob pushes
 
@@ -506,11 +558,47 @@ Action/status pages currently recognized:
 
 Items `47..57` are visible in the setup list but are kept inert/blank until their frames are learned well enough.
 
-## 8. Audio transport used by the application
+## 8. Power control used by the application
+
+### 8.1 Web/UI power state
+
+The web UI exposes an off state based on the RX-frame watchdog. When the radio is considered off, the display is greyed, all controls are disabled except POWER, and API command attempts are rejected with a radio-off message. A long POWER press runs the GPIO wake sequence.
+
+Important state fields returned by `/api/state` include:
+
+| Field | Meaning |
+|---|---|
+| `radio_powered` | Current UI/application power state inferred from valid RX frames. |
+| `powering_on` | True while the GPIO replay sequence is running. |
+| `power_message` | Human-readable power/mux status. |
+| `power_gpio` | BCM GPIO used for CH2 replay, default 18. |
+| `uart_select_gpio` | BCM GPIO used for the 74LVC157A `S` pin, default 23. |
+| `rx_power_alive` | True when recent valid RX frames are present. |
+| `rx_power_age_s` | Age of the latest valid RX frame. |
+| `rx_power_timeout_s` | Timeout used to decide off state. |
+
+Power-related API endpoints:
+
+| Endpoint | Method | Meaning |
+|---|---|---|
+| `/api/power_start` | POST | Runs the CH2 GPIO replay, switches the mux to USB-TTL TX, then waits for RX frames. |
+| `/api/radio_off` | POST | Refreshes the watchdog state and selects the replay path when RX is absent. |
+
+### 8.2 GPIO and mux behavior
+
+At process startup, unless `--radio-start-on` is supplied, GPIO23 is driven LOW before opening the serial port. This isolates the USB-TTL TX path so its idle HIGH level cannot interfere with the wake replay. When RX frames are later seen, the application drives GPIO23 HIGH to select USB-TTL TX. When RX frames disappear, it releases active holds and drives GPIO23 LOW again.
+
+The GPIO replay requires the `pigpio` Python module and a running `pigpiod` daemon. The recommended daemon command on Raspberry Pi is:
+
+```bash
+sudo pigpiod -s 1
+```
+
+## 9. Audio transport used by the application
 
 The Yaesu panel cable carries analog audio separately from the serial protocol. The application uses ALSA and browser streaming for audio convenience.
 
-### 8.1 RX audio
+### 9.1 RX audio
 
 Default path:
 
@@ -533,7 +621,7 @@ X-Audio-Rate: <rate>
 X-Audio-Channels: <channels>
 ```
 
-### 8.2 TX audio
+### 9.2 TX audio
 
 Default path:
 
@@ -558,7 +646,7 @@ Default timing:
 | PTT lead | 120 ms |
 | PTT tail | 80 ms |
 
-## 9. Capture files
+## 10. Capture files
 
 The save recorder writes a reverse-engineering capture folder/zip containing:
 
@@ -572,7 +660,7 @@ The save recorder writes a reverse-engineering capture folder/zip containing:
 
 Use captures to extend this protocol file. The safest workflow is one user action per capture segment, then compare the changed byte ranges against a known baseline.
 
-## 10. Reverse-engineering conventions
+## 11. Reverse-engineering conventions
 
 - All frame offsets are zero-based.
 - `+NNNN` means decimal byte offset from the frame start.
