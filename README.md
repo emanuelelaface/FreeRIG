@@ -39,7 +39,7 @@ The radio body and detachable front panel communicate over an 8-pin cable. The s
 | Pin | Signal | Notes |
 |---:|---|---|
 | 1 | Microphone | Analog microphone path. |
-| 2 | AUDIO GND | Audio ground. |
+| 2 | Audio GND | Audio ground. |
 | 3 | Speaker | Analog speaker/audio path. |
 | 4 | +3.3V | Not used (?). |
 | 5 | +13 V | Radio supply line. Treat as power, not logic. |
