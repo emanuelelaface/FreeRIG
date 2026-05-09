@@ -11,7 +11,7 @@ The map is intentionally conservative: fields that are not understood are docume
 | Pin | Signal | Direction / type | Notes |
 |---:|---|---|---|
 | 1 | Microphone | Analog | Microphone audio. Not part of the UART data stream. |
-| 2 | AUDIO GND | Audio Ground | Common reference for audio. |
+| 2 | Audio GND | Audio Ground | Common reference for audio. |
 | 3 | Speaker | Analog | Speaker/RX audio. Captured by a USB sound card in this project. |
 | 4 | +3.3V | Power | Not used (?). |
 | 5 | +13 V | Power | Radio supply. Do not connect to TTL or audio inputs. |
