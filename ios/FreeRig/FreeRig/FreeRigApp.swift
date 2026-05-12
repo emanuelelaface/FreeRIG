@@ -1,7 +1,8 @@
 import SwiftUI
+import UIKit
 
 @main
-struct FTM150iOSApp: App {
+struct FreeRigApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     @StateObject private var settings: AppSettings
@@ -16,12 +17,20 @@ struct FTM150iOSApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(viewModel: viewModel, settings: settings)
+                .onAppear {
+                    updateSystemBehavior(for: scenePhase)
+                }
         }
         .onChange(of: scenePhase) { _, phase in
+            updateSystemBehavior(for: phase)
             if phase == .background {
                 viewModel.releaseAllHeldCommands()
-                viewModel.stopTXAudio()
             }
         }
+    }
+
+    @MainActor
+    private func updateSystemBehavior(for phase: ScenePhase) {
+        UIApplication.shared.isIdleTimerDisabled = (phase == .active)
     }
 }

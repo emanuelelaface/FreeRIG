@@ -38,6 +38,7 @@ final class RadioViewModel: ObservableObject {
     private var stateSocketTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var connectTask: Task<Void, Never>?
+    private var commandFollowupTask: Task<Void, Never>?
     private var audioMonitorTask: Task<Void, Never>?
     private var rxStopTask: Task<Void, Never>?
     private var stateSocketDisabledForSession = false
@@ -76,6 +77,8 @@ final class RadioViewModel: ObservableObject {
     func disconnect() {
         connectTask?.cancel()
         connectTask = nil
+        commandFollowupTask?.cancel()
+        commandFollowupTask = nil
         rxStopTask?.cancel()
         rxStopTask = nil
         pollingTask?.cancel()
@@ -106,7 +109,7 @@ final class RadioViewModel: ObservableObject {
         lastError = nil
 
         do {
-            radioState = try await client.fetchState(config: config)
+            try await fetchAndApplyState(config: config, updateBackendStatus: false)
         } catch {
             setError(error.localizedDescription)
         }
@@ -199,12 +202,7 @@ final class RadioViewModel: ObservableObject {
             var iteration = 0
             while !Task.isCancelled {
                 do {
-                    self.radioState = try await self.client.fetchState(config: config)
-                    if self.backendStatus != .websocket {
-                        self.backendStatus = .polling
-                    }
-                    await self.syncRXAudioToState(config: config)
-                    self.lastError = nil
+                    try await self.fetchAndApplyState(config: config)
                 } catch {
                     self.setError(error.localizedDescription)
                 }
@@ -223,10 +221,8 @@ final class RadioViewModel: ObservableObject {
         Task {
             guard let config = settings.snapshot() else { return }
             do {
-                radioState = try await client.fetchState(config: config)
+                try await fetchAndApplyState(config: config)
                 await refreshAudioState(config: config)
-                await syncRXAudioToState(config: config)
-                lastError = nil
             } catch {
                 setError(error.localizedDescription)
             }
@@ -238,6 +234,7 @@ final class RadioViewModel: ObservableObject {
             guard let config = settings.snapshot() else { return }
             do {
                 try await client.sendCommand(command, duration: duration, config: config)
+                scheduleCommandFollowupStateBurst(config: config)
                 lastError = nil
             } catch {
                 setError(error.localizedDescription)
@@ -246,7 +243,14 @@ final class RadioViewModel: ObservableObject {
     }
 
     func topButton(_ command: String, long: Bool) {
-        sendPulse(command, duration: long ? "700ms" : "200ms")
+        if long {
+            // The real radio setup menu is more reliable with a longer F hold
+            // than the generic top-button long press.
+            let duration = command == "f" ? "1200ms" : "700ms"
+            sendPulse(command, duration: duration)
+        } else {
+            sendPulse(command, duration: "200ms")
+        }
     }
 
     func knobPress(_ command: String, long: Bool) {
@@ -274,6 +278,7 @@ final class RadioViewModel: ObservableObject {
             guard let config = settings.snapshot() else { return }
             do {
                 try await client.startPower(config: config)
+                scheduleCommandFollowupStateBurst(config: config)
                 lastError = nil
             } catch {
                 setError(error.localizedDescription)
@@ -288,6 +293,7 @@ final class RadioViewModel: ObservableObject {
             guard let config = settings.snapshot() else { return }
             do {
                 try await client.holdCommand(command, config: config)
+                scheduleCommandFollowupStateBurst(config: config)
             } catch {
                 heldCommands.remove(command)
                 setError(error.localizedDescription)
@@ -302,6 +308,7 @@ final class RadioViewModel: ObservableObject {
             guard let config = settings.snapshot() else { return }
             do {
                 try await client.releaseCommand(command, config: config)
+                scheduleCommandFollowupStateBurst(config: config)
             } catch {
                 setError(error.localizedDescription)
             }
@@ -444,6 +451,38 @@ final class RadioViewModel: ObservableObject {
             audioState = try await client.fetchAudioState(config: config)
         } catch {
             setError(error.localizedDescription)
+        }
+    }
+
+    private func fetchAndApplyState(config: ConnectionConfig, updateBackendStatus: Bool = true) async throws {
+        let state = try await client.fetchState(config: config)
+        radioState = state
+        if updateBackendStatus, backendStatus != .websocket {
+            backendStatus = .polling
+        }
+        await syncRXAudioToState(config: config)
+        lastError = nil
+    }
+
+    private func scheduleCommandFollowupStateBurst(config: ConnectionConfig) {
+        commandFollowupTask?.cancel()
+        commandFollowupTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                Task { @MainActor [weak self] in
+                    self?.commandFollowupTask = nil
+                }
+            }
+
+            for _ in 0 ..< 11 {
+                if Task.isCancelled { return }
+                do {
+                    try await self.fetchAndApplyState(config: config)
+                } catch {
+                    if Task.isCancelled { return }
+                }
+                try? await Task.sleep(for: .milliseconds(120))
+            }
         }
     }
 

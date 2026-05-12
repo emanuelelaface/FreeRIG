@@ -1,4 +1,4 @@
-# FTM150iOS
+# FreeRig
 
 Client iOS SwiftUI per il backend `ftm150.py`.
 
@@ -19,7 +19,7 @@ Client iOS SwiftUI per il backend `ftm150.py`.
 
 Apri in Xcode:
 
-- `ios/FTM150iOS/FTM150iOS.xcodeproj`
+- `ios/FreeRig/FreeRig.xcodeproj`
 
 ## Note
 

@@ -33,9 +33,9 @@ struct ConnectionConfig: Equatable {
 @MainActor
 final class AppSettings: ObservableObject {
     private enum Keys {
-        static let serverURL = "ios.serverURL"
-        static let username = "ios.username"
-        static let autoConnect = "ios.autoConnect"
+        static let serverURL = "freerig.ios.serverURL"
+        static let username = "freerig.ios.username"
+        static let autoConnect = "freerig.ios.autoConnect"
     }
 
     @Published var serverURLString: String {
@@ -54,7 +54,7 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(autoConnect, forKey: Keys.autoConnect) }
     }
 
-    static let passwordKey = "FTM150.iOS.password"
+    static let passwordKey = "FreeRig.iOS.password"
 
     init() {
         self.serverURLString = UserDefaults.standard.string(forKey: Keys.serverURL) ?? "https://ftm150.scumm.it"
