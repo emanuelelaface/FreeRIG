@@ -1,7 +1,8 @@
 # Yaesu FTM-150 Remote Panel Controller
 
 <p align="center">
-  <img src="https://github.com/emanuelelaface/FTM150/blob/main/images/screenshot1.png" alt="Schematic" style="width: 100%;">
+  <img src="https://github.com/emanuelelaface/FTM150/blob/main/images/screenshot1.png" alt="Schematic" style="width: 75%;">
+  <img src="https://github.com/emanuelelaface/FTM150/blob/main/images/screenshot2.png" alt="Schematic" style="width: 21%;">
 </p>
 
 Experimental Python controller and web front panel for the **Yaesu FTM-150** transceiver.
