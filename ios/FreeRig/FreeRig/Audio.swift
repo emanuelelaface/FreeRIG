@@ -153,10 +153,13 @@ final class MicrophoneStreamer {
         stop()
 
         let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP])
+        try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP])
         try audioSession.setPreferredSampleRate(targetRate)
         try? audioSession.setPreferredInputNumberOfChannels(1)
         try audioSession.setPreferredIOBufferDuration(0.02)
+        if let builtInMic = audioSession.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try? audioSession.setPreferredInput(builtInMic)
+        }
         try audioSession.setActive(true)
 
         self.socket = socket
