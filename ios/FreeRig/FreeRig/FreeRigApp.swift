@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 @main
-struct FreeRigApp: App {
+struct FreeRIGApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     @StateObject private var settings: AppSettings

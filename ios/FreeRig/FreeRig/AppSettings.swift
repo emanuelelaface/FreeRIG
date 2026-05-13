@@ -54,7 +54,7 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(autoConnect, forKey: Keys.autoConnect) }
     }
 
-    static let passwordKey = "FreeRig.iOS.password"
+    static let passwordKey = "FreeRIG.iOS.password"
 
     init() {
         self.serverURLString = UserDefaults.standard.string(forKey: Keys.serverURL) ?? "https://ftm150.scumm.it"
