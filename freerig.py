@@ -1,73 +1,6 @@
 #!/home/ema/venv/bin/python
 """
-FTM-150 panel I/O emulator (experimental) - v72
-
-- TX: sends the 210-byte panel->body idle frame continuously at 500000 8N1.
-- Commands: pulses front-panel keys, encoders and microphone keys.
-- RX: receives body->panel 1100-byte display/status frames and lets you print a
-      decoded snapshot with the interactive command: display
-      diff display frames against a learned baseline: display learn / display diff
-      decode the mapped display fields: display decode
-      with VOL/SQL/S-meter overlay decoding; v7 exposes VOL raw value at +0017
-      v8 ignores the alternate menu display frames by default so display/decode/diff
-      keep using the normal dual-frequency display frame
-      v9 maps MEM/sub source code 0x42 observed when main moves to the other side
-      v10 decodes lower status/volume/squelch separately for left and right sides
-      v11 decodes the observed TX/RX activity meter/status bytes (+0004/+0015/+0192/+0193)
-      v12 treats +0192=0x11 as TX/PTT even when +0004 stays 0x00, seen on right side
-      v13 exposes the alternate/menu display stream as display2 with raw/learn/diff/watch
-      v14 stores every non-blank f1 60 frame as display2 and adds display2 cells/grid
-      v15 improves display2 menu parsing: detects numbered menu lists and fixes cell alignment
-      v16 reclassifies f1 21/menu-like frames as display2 and improves visible text guesses
-      v17 decodes MIC MUTE display flag observed at +0155 (0x03 = muted)
-      v26 aligns the right VFO header and adds a LCD-style MUTE overlay in the web GUI
-      v35 maps right-side memory group at +0031, centers LCD badges, and English-only UI labels
-      v27 fixes right-side SQL/VOL web bar, RX S-meter scaling, and per-side RX LEDs
-      v31 maps RX side and S-meter: left +0004/+0015, right +0005/+0016.
-      v32 normalizes TX/PO meter on 0..10 scale: raw=10 => full bar.
-      v36 normalizes RX S-meter on 0..10 scale: raw=10 => full bar.
-      v46 cleans audio UI and sets Raspberry/CM108 DATA defaults.
-      v80 implements learned menu 05 S-METER SYMBOL and maps S-meter styles from radio frames.
-      v52 fixes setup menu rendering: no stale third rows, footer=options/value, clickable rows.
-      v28 fixes right-side lower-value offset (+0014, not +0015) and removes main-side RX fallback
-      v71 fixes BR_PRESS duration: uses normal key pulse, not 10 ms
-      v58 treats menu 34 TONE SQL FREQ as CTCSS/DCS submenu with selectable tone/code values.
-      v74 learns setup values 02/03/04/06 from F3 20 frames; unknown values stay UNKNOWN/raw.
-      v89 fixes menu 05 graphical S-meter symbols and style-bit lower labels.
-      v90 adds save start/save stop capture recorder for RX screen changes and TX commands.
-      v85 learns setup menu 29 REAR SP OUT percent values from F3 20 frames.
-      v86 highlights the setup value bar only when radio display2 byte +0026 is 0x06.
-      v87 learns setup menu 34 TONE SQL FREQ CTCSS Hz values from F3 20 frames.
-      v88 learns setup menus 37 PR FREQUENCY, 42 DUAL RX INTERVAL, 45 DATA BAND, and 46 DATA SPEED from F3 20 frames.
-      v84 keeps setup value cells clickable; values remain RX-decoded only.
-      v92 shows menu 25 as a submenu arrow in the main list and splits submenu focus between key and value cells.
-      v93 decodes learned submenu pages for menu 09 VOX, 14 SUB BAND and 18 PMG.
-      v94 keeps submenu labels on one line and decodes the PMG CLEAR OK/CANCEL overlay.
-      v95 mounts the PMG CLEAR confirm dialog element inside the LCD so it is actually rendered.
-      v96 renders dialog popup text in white and decodes menu 20 BAND SKIP submenu.
-      v97 decodes menu 36 PAGER CODE as a four-row scrolling submenu.
-      v98 decodes CLONE/RESET action prompts: This->Other, Other->This, Software Version and Factory Reset.
-      v99 reapplies menu 15 HOME CH compact-text decoding, blanks menu 24 without RPT, and makes SOFTWARE VERSION read-only.
-      v100 keeps setup items 47..57 inert/blank in the web GUI until those menus are learned.
-      v101 decodes menu 32 DTMF MEMORY as a real radio-provided submenu.
-      v102 decodes menu 31 DTMF memory values and menu 32 DTMF digit edit screen.
-      v103 renders menu 32 DTMF edit like the captured radio screen and enables short/long knob presses.
-      v104 renders menu 32 DTMF edit as the real 20-key keypad grid: 1-5, 6-0, A-D/*/# plus cursor/space/delete tools.
-      v105 preserves DTMF spaces, shows edit position, and equalizes DTMF keypad rows.
-      v106 holds the DTMF edit cursor stable during 0x80 phase frames and decodes menu 27 CLOCK TYPE by declared length.
-      v107 classifies PMG F1 25 frames as display2 so they do not corrupt the normal VFO display snapshot.
-      v108 hardens PMG handling: filters PMG companion F1 00 unconditionally, keeps a clean normal display fallback, and stops PMG registered slots from flickering.
-      v109 latches PMG in the web state so normal VFO painting cannot run between alternating PMG frames.
-      v110 adds recorder-level PMG hard guard: F1 25 is forcibly reclassified as display2 even if any caller passes kind=display.
-      v111 keeps a separate latched PMG menu frame so F1 60/menu refreshes cannot kick the web LCD out of PMG.
-      v109 PMG hard guard: latches PMG mode from F1 25/F1 00, keeps those frames out of normal LCD state, and exposes a build id in /api/state.
-
-Wiring for full-duplex tests with ONE USB-TTL adapter:
-  USB-TTL TX  -> radio BODY RX line (the line that originally receives panel->body)
-                 preferably through a 1k-4.7k series resistor
-  USB-TTL RX  <- radio BODY TX line (the line that originally sends body->panel)
-                 preferably through a 4.7k-10k series resistor
-  USB-TTL GND -> radio GND
+Free RIG panel I/O emulator (experimental)
 
 Important:
   Do NOT leave the original panel TX connected to the same body RX line while this
@@ -965,7 +898,7 @@ def decode_display_snapshot(frame: bytes, raw: bool = False) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Human-readable RX display decode, mapped so far from FTM-150 captures.
+# Human-readable RX display decode, mapped so far from Free RIG captures.
 # This is intentionally partial: unknown values are printed in hex instead of
 # being guessed. v6 adds lower-left VOL/SQL/S status decoding and guards the
 # decoder so transient/unknown display states do not crash the command loop.
@@ -2398,7 +2331,7 @@ class SaveRecorder:
             }
             self._write_jsonl_unlocked(meta)
             self._write_text(os.path.join(root, "README.txt"), "\n".join([
-                "FTM-150 save capture",
+                "Free RIG save capture",
                 "",
                 "Use this folder/zip for submenu reconstruction.",
                 "Files:",
@@ -2713,7 +2646,7 @@ def command_loop(tx: PanelTx, rx: Optional[BodyRx]) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="FTM-150 panel I/O emulator, experimental v13")
+    ap = argparse.ArgumentParser(description="Free RIG panel I/O emulator, experimental v13")
     ap.add_argument("--port", default="/dev/cu.usbserial-0001")
     ap.add_argument("--baud", type=int, default=BAUD)
     ap.add_argument("--verbose", action="store_true")
@@ -2793,7 +2726,7 @@ WEB_HTML = r'''<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FTM-150 Web Panel v103</title>
+<title>Free RIG Web Panel</title>
 <style>
   :root { --orange:#d75a20; --orange2:#e9752b; --lcdBottom:#c94c18; --lcdAccent:#d75a20; --lcdAccentGlow:rgba(214,86,31,.2); --lcdText:#24211d; --rx:#35d65a; --tx:#ff2438; }
   * { box-sizing: border-box; }
@@ -3061,7 +2994,7 @@ WEB_HTML = r'''<!doctype html>
         <div class="knob-block"><div id="blPressKnob" class="knob" title="tap: short press, hold: long press"></div><div class="knob-label">DIAL</div><div class="knob-actions"><button class="mini-btn" onclick="sendCmd('bl_left','5ms')">◀</button><button id="blPressBtn" class="mini-btn" title="tap: short press, hold: long press">P</button><button class="mini-btn" onclick="sendCmd('bl_right','5ms')">▶</button></div></div>
       </div>
       <div class="center">
-        <div class="brand">DUAL BAND TRANSCEIVER FTM-150</div>
+        <div class="brand">DUAL BAND TRANSCEIVER Free RIG</div>
         <div class="lcd-frame"><div class="lcd">
           <div id="muteOverlay" class="mute-overlay">MUTE</div>
           <div id="dialogOverlay" class="dialog-overlay"></div>
@@ -5682,7 +5615,7 @@ QUICK_MENU_LABELS = [
     "", "CLONETX", "CLONERX",
 ]
 
-# Setup menu labels/structure from the FTM-150 manual and verified against
+# Setup menu labels/structure from the Free RIG manual and verified against
 # the menu probe captures.  The frame payload often contains stale fragments
 # from other screens ("RPT FRQ", "STEP", "BACKUP" etc.); for the web LCD we
 # decode only the numeric item IDs from the frame and render these fixed labels.
@@ -9007,7 +8940,7 @@ def gpio_write_once(gpio: int, level: int) -> Tuple[bool, str]:
             pass
 
 def run_embedded_power_replay(gpio: int, tail_repeated: bool = True, verbose: bool = False) -> Tuple[bool, str]:
-    """Run the known-good CH2 GPIO replay used to wake the FTM-150 body."""
+    """Run the known-good CH2 GPIO replay used to wake the Free RIG body."""
     ns = argparse.Namespace(
         gpio=int(gpio),
         mode="startup",
@@ -10065,7 +9998,7 @@ class WebContext:
         self.ptt_latched = False
 
 
-class FTM150WebHandler(BaseHTTPRequestHandler):
+class FreeRigWebHandler(BaseHTTPRequestHandler):
     ctx: WebContext
 
     def log_message(self, fmt: str, *args) -> None:
@@ -10175,7 +10108,7 @@ def _web_console_loop(rx: Optional[BodyRx], httpd: ThreadingHTTPServer) -> None:
         print("[console] command not handled here. Use the GUI for radio commands, or: save start/stop/status, quit")
 
 def web_main() -> int:
-    ap = argparse.ArgumentParser(description="FTM-150 web panel GUI - v51 fixes live menu rendering and labels")
+    ap = argparse.ArgumentParser(description="Free RIG web panel GUI - v51 fixes live menu rendering and labels")
     ap.add_argument("--port", default="/dev/ttyUSB0", help="radio serial port")
     ap.add_argument("--baud", type=int, default=BAUD)
     ap.add_argument("--host", default="0.0.0.0", help="web host; default 0.0.0.0 = reachable from the LAN")
@@ -10320,8 +10253,8 @@ def web_main() -> int:
         print("[ptt] disabled: TX audio will not key the radio")
 
     ctx = WebContext(tx=tx, rx=rx, demo=args.demo, audio=audio, tx_audio=tx_audio, ptt=ptt, decode_enabled=args.decode, power_gpio=args.power_gpio, uart_select_gpio=args.uart_select_gpio, radio_start_on=args.radio_start_on, rx_power_timeout_s=args.rx_power_timeout)
-    FTM150WebHandler.ctx = ctx
-    httpd = ThreadingHTTPServer((args.host, args.web_port), FTM150WebHandler)
+    FreeRigWebHandler.ctx = ctx
+    httpd = ThreadingHTTPServer((args.host, args.web_port), FreeRigWebHandler)
     httpd.verbose_http = args.verbose_http
     if getattr(sys.stdin, "isatty", lambda: False)():
         threading.Thread(target=_web_console_loop, args=(rx, httpd), daemon=True).start()

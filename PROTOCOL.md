@@ -1,6 +1,6 @@
-# Yaesu FTM-150 Front Panel Protocol Notes
+# Free RIG Front Panel Protocol Notes
 
-This document describes the currently reverse-engineered hardware and data protocol used by the Yaesu FTM-150 radio body and detachable front panel, as implemented by `ftm150.py`.
+This document describes the currently reverse-engineered hardware and data protocol created from the Yaesu FTM-150 radio body and detachable front panel, as implemented by `freerig.py`.
 
 The map is intentionally conservative: fields that are not understood are documented as unknown or raw. Offsets are **zero-based decimal offsets** from the start of the frame unless explicitly written in hexadecimal.
 

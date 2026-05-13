@@ -231,7 +231,7 @@ private struct RadioPanelView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("DUAL BAND TRANSCEIVER FTM-150")
+            Text("DUAL BAND TRANSCEIVER Free RIG")
                 .font(.system(size: 12, weight: .black, design: .rounded))
                 .foregroundStyle(AppTheme.brandOrange)
                 .tracking(2.4)

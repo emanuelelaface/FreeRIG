@@ -1,11 +1,11 @@
-# Yaesu FTM-150 Remote Panel Controller
+# Free RIG Remote Panel Controller
 
 <p align="center">
-  <img src="https://github.com/emanuelelaface/FTM150/blob/main/images/screenshot1.png" alt="Schematic" style="width: 75%;">
-  <img src="https://github.com/emanuelelaface/FTM150/blob/main/images/screenshot2.png" alt="Schematic" style="width: 21%;">
+  <img src="https://github.com/emanuelelaface/FreeRig/blob/main/images/screenshot1.png" alt="Schematic" style="width: 75%;">
+  <img src="https://github.com/emanuelelaface/FreeRig/blob/main/images/screenshot2.png" alt="Schematic" style="width: 21%;">
 </p>
 
-Experimental Python controller and web front panel for the **Yaesu FTM-150** transceiver.
+Experimental Python controller and web front panel created from a **Yaesu FTM-150** transceiver.
 
 The application emulates the detachable front-panel data link, continuously sends Yaesu panel-to-body idle frames, injects key/knob/microphone events, decodes the body-to-panel display stream, can power on the radio body through a captured GPIO wake waveform, and optionally exposes a browser-based control surface with RX/TX audio through a USB sound card.
 
@@ -30,7 +30,7 @@ The application emulates the detachable front-panel data link, continuously send
 
 ```text
 .
-├── ftm150.py      # main application
+├── freerig.py      # main application
 ├── README.md      # project overview and usage
 └── PROTOCOL.md    # hardware and protocol notes
 ```
@@ -104,7 +104,7 @@ With the GPIO18/GPIO23 power-on mux hardware installed:
 
 ```bash
 sudo pigpiod -s 1
-python3 ftm150.py --port /dev/ttyUSB0 --web-port 8080
+python3 freerig.py --port /dev/ttyUSB0 --web-port 8080
 ```
 
 The default GPIOs are:
@@ -117,7 +117,7 @@ GPIO23 = 74LVC157A S select, LOW=replay GPIO, HIGH=USB-TTL TX
 If the radio is already on when the program starts, use:
 
 ```bash
-python3 ftm150.py --port /dev/ttyUSB0 --web-port 8080 --radio-start-on
+python3 freerig.py --port /dev/ttyUSB0 --web-port 8080 --radio-start-on
 ```
 
 Open:
@@ -131,7 +131,7 @@ LAN access is enabled by default because the web server binds to `0.0.0.0`. Use 
 ### Demo mode
 
 ```bash
-python3 ftm150.py --demo --web-port 8080
+python3 freerig.py --demo --web-port 8080
 ```
 
 Demo mode starts the GUI without opening the serial port or talking to a radio.
@@ -139,7 +139,7 @@ Demo mode starts the GUI without opening the serial port or talking to a radio.
 ### Typical Raspberry Pi + CM108 command
 
 ```bash
-python3 ftm150.py \
+python3 freerig.py \
   --port /dev/ttyUSB0 \
   --web-port 8080 \
   --audio-device plughw:0,0 \
@@ -150,7 +150,7 @@ python3 ftm150.py \
 For CM108/CM119 GPIO PTT instead of serial microphone PTT:
 
 ```bash
-python3 ftm150.py \
+python3 freerig.py \
   --port /dev/ttyUSB0 \
   --web-port 8080 \
   --audio-device plughw:0,0 \
@@ -184,7 +184,7 @@ python3 ftm150.py \
 
 ## Browser/API endpoints
 
-The web interface is self-contained in `ftm150.py`.
+The web interface is self-contained in `freerig.py`.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
