@@ -38,7 +38,7 @@ try:
 except ModuleNotFoundError:
     pigpio = None  # required only for GPIO power-on replay
 
-BUILD_ID = "v114-menu1-inputbar-20260513"
+BUILD_ID = "v115-card1-audio-20260514"
 BAUD = 500000
 TX_FRAME_LEN = 210
 RX_FRAME_LEN = 1100
@@ -4286,7 +4286,7 @@ class AudioStreamer:
     def __init__(
         self,
         enabled: bool = True,
-        device: str = "plughw:0,0",
+        device: str = "plughw:1,0",
         rate: int = 48000,
         channels: int = 1,
         chunk_ms: int = 10,
@@ -4402,7 +4402,7 @@ class AudioStreamer:
 
     def _run_amixer(self, args: List[str]) -> str:
         if not self.alsa_card:
-            return "alsa card unknown; use --rx-alsa-card 0"
+            return "alsa card unknown; use --rx-alsa-card 1"
         cmd = ["amixer", "-c", str(self.alsa_card)] + args
         try:
             r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1.5)
@@ -4516,7 +4516,7 @@ class TxAudioSink:
     def __init__(
         self,
         enabled: bool = True,
-        device: str = "plughw:0,0",
+        device: str = "plughw:1,0",
         rate: int = 48000,
         channels: int = 1,
         buffer_time_us: int = 50000,
@@ -4667,7 +4667,7 @@ class TxAudioSink:
             return
         if not self.alsa_card:
             with self.lock:
-                self.last_alsa_message = "alsa card unknown; use --tx-alsa-card 0"
+                self.last_alsa_message = "alsa card unknown; use --tx-alsa-card 1"
             return
         cmd = ["amixer", "-c", str(self.alsa_card), "sset", "Speaker", f"{self.alsa_speaker_volume}%", "unmute"]
         try:
@@ -7670,7 +7670,7 @@ def _menu16_tag_keypad_layout(page: int, lower: bool = False) -> Tuple[List[str]
       A..M / N..Z / abc 123 #%^ <- SPACE -> DEL
       a..m / n..z / ABC 123 #%^ <- SPACE -> DEL
       1..0 - / : / ; ( ) ¥ & @ " . , ? ! ' / ABC #%^ <- SPACE -> DEL
-      [ ] { } # % ^ _ + = * \ | / ~ < > $ ` . / ABC 123 <- SPACE -> DEL
+      [ ] { } # % ^ _ + = * \\ | / ~ < > $ ` . / ABC 123 <- SPACE -> DEL
 
     The rows below use the radio marker indices, so clicks still send the
     physical knob steps to the correct highlighted item.
@@ -10148,17 +10148,17 @@ def web_main() -> int:
     ap.add_argument("--ssl-cert", default=None, help="TLS PEM certificate to enable HTTPS/WSS")
     ap.add_argument("--ssl-key", default=None, help="TLS PEM key to enable HTTPS/WSS")
     ap.add_argument("--no-audio", action="store_true", help="disable RX audio streaming in the browser")
-    ap.add_argument("--audio-device", default="plughw:0,0", help="RX capture ALSA device, e.g. plughw:0,0 or hw:0,0")
+    ap.add_argument("--audio-device", default="plughw:1,0", help="RX capture ALSA device; default plughw:1,0 = USB Audio card 1")
     ap.add_argument("--audio-rate", type=int, default=48000, help="RX PCM audio sample rate toward the browser")
     ap.add_argument("--audio-chunk-ms", type=int, default=10, help="RX HTTP audio chunk size in milliseconds")
     ap.add_argument("--audio-buffer-time", type=int, default=50000, help="ALSA RX buffer-time in microseconds")
     ap.add_argument("--audio-period-time", type=int, default=10000, help="ALSA RX period-time in microseconds")
-    ap.add_argument("--rx-alsa-card", default="0", help="ALSA card used to configure Mic/AGC for RX capture, default 0")
+    ap.add_argument("--rx-alsa-card", default="1", help="ALSA card used to configure Mic/AGC for RX capture, default 1")
     ap.add_argument("--rx-alsa-mic-volume", type=int, default=45, help="set the ALSA 'Mic' mixer to this percentage when RX audio starts, default 45")
     ap.add_argument("--rx-alsa-agc-off", action="store_true", default=True, help="turn off the ALSA 'Auto Gain Control' control when RX audio starts; default enabled")
     ap.add_argument("--rx-alsa-agc-on", dest="rx_alsa_agc_off", action="store_false", help="leave the ALSA 'Auto Gain Control' control enabled for RX capture")
     ap.add_argument("--no-tx-audio", action="store_true", help="disable TX audio from the browser microphone")
-    ap.add_argument("--tx-audio-device", default="plughw:0,0", help="TX playback ALSA device; default plughw:0,0")
+    ap.add_argument("--tx-audio-device", default="plughw:1,0", help="TX playback ALSA device; default plughw:1,0 = USB Audio card 1")
     ap.add_argument("--tx-audio-rate", type=int, default=48000, help="TX PCM audio sample rate from the browser toward the CM108")
     ap.add_argument("--tx-playback-channels", type=int, choices=(1, 2), default=2, help="TX playback ALSA channels; default 2 duplicates browser mono to L+R")
     ap.add_argument("--tx-aplay-verbose", action="store_true", help="enable verbose aplay output in GUI diagnostics")
@@ -10168,7 +10168,7 @@ def web_main() -> int:
     ap.add_argument("--tx-agc", action="store_true", help="enable Raspberry-side TX AGC/normalization; disabled by default to avoid distortion")
     ap.add_argument("--tx-agc-target", type=float, default=0.60, help="TX AGC target peak, 0.60 = anti-distortion headroom")
     ap.add_argument("--tx-agc-max-boost", type=float, default=10.0, help="maximum Raspberry-side TX AGC boost")
-    ap.add_argument("--tx-alsa-card", default="0", help="ALSA card used to configure Speaker, default 0")
+    ap.add_argument("--tx-alsa-card", default="1", help="ALSA card used to configure Speaker, default 1")
     ap.add_argument("--tx-alsa-speaker-volume", type=int, default=90, help="set the ALSA 'Speaker' mixer to this percentage when TX starts, default 90")
     ap.add_argument("--tx-ptt-lead-ms", type=int, default=120, help="delay between PTT ON and microphone audio transmission")
     ap.add_argument("--tx-ptt-tail-ms", type=int, default=80, help="silent tail before releasing PTT")
