@@ -1001,6 +1001,7 @@ def decode_mode_shift(x: int) -> str:
     base = x & 0x1F
     shift_bits = x & 0x60
     mode = {
+        0x01: "FM",
         0x09: "FM",
         0x0A: "AM",
     }.get(base, f"mode?{hx(base)}")
