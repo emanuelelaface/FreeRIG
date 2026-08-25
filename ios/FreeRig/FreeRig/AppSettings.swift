@@ -7,10 +7,6 @@ struct ConnectionConfig: Equatable {
     let username: String
     let password: String
 
-    var basicAuthorizationHeader: String {
-        let token = Data("\(username):\(password)".utf8).base64EncodedString()
-        return "Basic \(token)"
-    }
 
     func endpoint(path: String) -> URL {
         if path.hasPrefix("/") {

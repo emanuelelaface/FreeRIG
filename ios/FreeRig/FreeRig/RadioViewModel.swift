@@ -89,10 +89,14 @@ final class RadioViewModel: ObservableObject {
         stateSocketTask = nil
         stateSocket?.cancel(with: .goingAway, reason: nil)
         stateSocket = nil
+        backendStatus = .disconnected
         stopRXAudio()
         stopTXAudio()
-        backendStatus = .disconnected
         stateSocketDisabledForSession = false
+
+        if let config = settings.snapshot() {
+            client.clearAuthentication(config: config)
+        }
     }
 
     func clearDiagnosticsLog() {
@@ -109,9 +113,20 @@ final class RadioViewModel: ObservableObject {
         lastError = nil
 
         do {
+            try await client.authenticate(config: config)
+            appendLog("Authenticated with Apache session.")
+        } catch {
+            backendStatus = .disconnected
+            setError(error.localizedDescription)
+            return
+        }
+
+        do {
             try await fetchAndApplyState(config: config, updateBackendStatus: false)
         } catch {
+            backendStatus = .disconnected
             setError(error.localizedDescription)
+            return
         }
 
         do {

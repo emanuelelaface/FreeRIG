@@ -44,7 +44,7 @@ private func configureRadioAudioSession(
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
-            options: [.allowBluetooth, .defaultToSpeaker]
+            options: [.allowBluetoothHFP, .defaultToSpeaker]
         )
     }
 
