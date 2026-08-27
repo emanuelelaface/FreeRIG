@@ -41,6 +41,7 @@ final class RadioViewModel: ObservableObject {
     private var commandFollowupTask: Task<Void, Never>?
     private var audioMonitorTask: Task<Void, Never>?
     private var rxStopTask: Task<Void, Never>?
+    private var rxRestartTask: Task<Void, Never>?
     private var stateSocketDisabledForSession = false
     private var lastLoggedError: (message: String, time: Date)?
 
@@ -81,6 +82,8 @@ final class RadioViewModel: ObservableObject {
         commandFollowupTask = nil
         rxStopTask?.cancel()
         rxStopTask = nil
+        rxRestartTask?.cancel()
+        rxRestartTask = nil
         pollingTask?.cancel()
         pollingTask = nil
         audioMonitorTask?.cancel()
@@ -371,6 +374,8 @@ final class RadioViewModel: ObservableObject {
     func stopRXAudio() {
         rxStopTask?.cancel()
         rxStopTask = nil
+        rxRestartTask?.cancel()
+        rxRestartTask = nil
         rxPlayer.stop()
         isRXAudioRunning = false
         stopAudioMonitorIfIdle()
@@ -427,7 +432,7 @@ final class RadioViewModel: ObservableObject {
                 let processorSize = audio.tx?.processorSize ?? 1024
                 let leadTimeMs = audio.tx?.pttLeadMs ?? 120
 
-                try txStreamer.start(socket: socket, targetRate: rate, processorSize: processorSize, leadTimeMs: leadTimeMs) { [weak self] message in
+                try await txStreamer.start(socket: socket, targetRate: rate, processorSize: processorSize, leadTimeMs: leadTimeMs) { [weak self] message in
                     self?.isTXAudioRunning = false
                     self?.setError(message)
                     if let config = self?.settings.snapshot() {
@@ -510,17 +515,16 @@ final class RadioViewModel: ObservableObject {
             let request = try client.makeRXAudioRequest(config: config)
 
             audioState = audio
-            rxPlayer.start(request: request, sampleRate: rate) { [weak self] message in
-                self?.isRXAudioRunning = false
-                self?.setError(message)
-                if let config = self?.settings.snapshot() {
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        await self.refreshAudioState(config: config)
-                        self.stopAudioMonitorIfIdle()
-                    }
+            try await rxPlayer.start(request: request, sampleRate: rate) { [weak self] message in
+                guard let self else { return }
+                self.isRXAudioRunning = false
+                self.setError(message)
+                if let config = self.settings.snapshot() {
+                    self.scheduleRXRestart(config: config)
                 }
             }
+            rxRestartTask?.cancel()
+            rxRestartTask = nil
             isRXAudioRunning = true
             lastError = nil
         } catch {
@@ -534,6 +538,8 @@ final class RadioViewModel: ObservableObject {
 
     private func syncRXAudioToState(config: ConnectionConfig) async {
         if isTXAudioRunning {
+            rxRestartTask?.cancel()
+            rxRestartTask = nil
             rxStopTask?.cancel()
             rxStopTask = nil
             if isRXAudioRunning {
@@ -551,7 +557,39 @@ final class RadioViewModel: ObservableObject {
             return
         }
 
+        rxRestartTask?.cancel()
+        rxRestartTask = nil
         scheduleRXStopIfNeeded()
+    }
+
+    private func scheduleRXRestart(config: ConnectionConfig) {
+        guard backendStatus != .disconnected, isRadioReceiving, !isTXAudioRunning else { return }
+        guard rxRestartTask == nil else { return }
+
+        appendLog("RX audio connection lost; automatic reconnect enabled.")
+        rxRestartTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.rxRestartTask = nil }
+
+            let delays = [250, 500, 1000, 2000, 3000]
+            for delay in delays {
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .milliseconds(delay))
+                if Task.isCancelled { return }
+                guard self.backendStatus != .disconnected,
+                      self.isRadioReceiving,
+                      !self.isTXAudioRunning,
+                      !self.isRXAudioRunning else { return }
+
+                await self.startListeningIfPossible(config: config)
+                if self.isRXAudioRunning {
+                    self.appendLog("RX audio reconnected.")
+                    return
+                }
+            }
+
+            self.appendLog("RX audio reconnect failed; waiting for the next radio state update.")
+        }
     }
 
     private func scheduleRXStopIfNeeded() {

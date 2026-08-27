@@ -49,10 +49,11 @@ private func configureRadioAudioSession(
     }
 
     try? session.setPreferredSampleRate(sampleRate)
-    try? session.setPreferredInputNumberOfChannels(1)
     try session.setPreferredIOBufferDuration(0.02)
-    try session.setActive(true)
 
+    // Configure input properties only for categories that actually have an
+    // input path. Doing this while the category is .playback produces
+    // AVAudioSession badParam (-50 / 4294967246).
     switch profile {
     case .duplexPhoneMicBluetoothOutput:
         if let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
@@ -68,7 +69,22 @@ private func configureRadioAudioSession(
         break
     }
 
+    try session.setActive(true)
     dumpAudioRoute("configured")
+}
+
+private func waitForUsableAudioRoute(timeoutMilliseconds: Int = 1200) async throws {
+    let session = AVAudioSession.sharedInstance()
+    let attempts = max(1, timeoutMilliseconds / 60)
+
+    for _ in 0 ..< attempts {
+        if session.sampleRate > 1, !session.currentRoute.outputs.isEmpty {
+            return
+        }
+        try await Task.sleep(for: .milliseconds(60))
+    }
+
+    throw RadioAPIError.server("iOS audio route is not ready.")
 }
 
 private func dumpAudioRoute(_ tag: String) {
@@ -89,6 +105,7 @@ final class PCMStreamPlayer {
     private var outputFormat: AVAudioFormat?
     private var streamTask: Task<Void, Never>?
     private let state = PlaybackState()
+    private let lifecycleLock = NSLock()
     private var chunkBytes = 3840
     private var startThresholdBuffers = 2
 
@@ -104,56 +121,58 @@ final class PCMStreamPlayer {
         request: URLRequest,
         sampleRate: Double,
         onError: @escaping @MainActor (String) -> Void
-    ) {
+    ) async throws {
         stop()
 
         let samplesPerChunk = max(960, Int(sampleRate * 0.04))
         chunkBytes = samplesPerChunk * MemoryLayout<Int16>.size
         startThresholdBuffers = 2
 
-        do {
-            /*
-             Importante:
-             Se la sessione è già in playAndRecord, NON la tocchiamo.
-             Altrimenti romperemmo il TX quando parte l'RX.
-             */
-            let audioSession = AVAudioSession.sharedInstance()
-            if audioSession.category != .playAndRecord {
-                try configureRadioAudioSession(
-                    sampleRate: sampleRate,
-                    profile: .playbackOnly
-                )
-            }
-        } catch {
-            Task { @MainActor in
-                onError("RX audio session: \(error.localizedDescription)")
-            }
-            return
-        }
+        // Keep the same audio-session profile for RX and TX. Switching from
+        // .playback to .playAndRecord when PTT is pressed was leaving RemoteIO
+        // briefly at 0 Hz on Bluetooth routes.
+        try configureRadioAudioSession(
+            sampleRate: sampleRate,
+            profile: .duplexPhoneMicBluetoothOutput
+        )
+        try await waitForUsableAudioRoute()
 
         let engine = AVAudioEngine()
         let playerNode = AVAudioPlayerNode()
-        let format = AVAudioFormat(
+        guard let format = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
             channels: 1
-        )!
+        ) else {
+            throw RadioAPIError.server("Unsupported RX audio format.")
+        }
 
         engine.attach(playerNode)
         engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+        engine.prepare()
 
-        do {
-            engine.prepare()
-            try engine.start()
-        } catch {
-            Task { @MainActor in
-                onError("RX audio: \(error.localizedDescription)")
+        var lastStartError: Error?
+        for attempt in 0 ..< 3 {
+            do {
+                try engine.start()
+                lastStartError = nil
+                break
+            } catch {
+                lastStartError = error
+                engine.stop()
+                if attempt < 2 {
+                    try await Task.sleep(for: .milliseconds(140 * (attempt + 1)))
+                }
             }
-            return
+        }
+        if let lastStartError {
+            throw lastStartError
         }
 
+        lifecycleLock.lock()
         self.engine = engine
         self.playerNode = playerNode
         self.outputFormat = format
+        lifecycleLock.unlock()
 
         playerNode.volume = 1.0
         state.reset()
@@ -187,6 +206,12 @@ final class PCMStreamPlayer {
                 if evenCount > 0 {
                     self.schedulePCM16Chunk(pending.prefix(evenCount))
                 }
+
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        onError("RX audio stream ended; reconnecting.")
+                    }
+                }
             } catch is CancellationError {
             } catch {
                 await MainActor.run {
@@ -202,15 +227,19 @@ final class PCMStreamPlayer {
 
         state.reset()
 
+        lifecycleLock.lock()
         playerNode?.stop()
         engine?.stop()
-
         playerNode = nil
         engine = nil
         outputFormat = nil
+        lifecycleLock.unlock()
     }
 
     private func schedulePCM16Chunk(_ data: Data) {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+
         guard let outputFormat, let playerNode else { return }
 
         let sampleCount = data.count / MemoryLayout<Int16>.size
@@ -256,7 +285,7 @@ final class PCMStreamPlayer {
 }
 
 final class MicrophoneStreamer {
-    private let engine = AVAudioEngine()
+    private var engine: AVAudioEngine?
     private let sendGate = SendGate()
     private let sendErrorState = SendErrorState()
 
@@ -264,8 +293,6 @@ final class MicrophoneStreamer {
     private var socketWriter: PCMWebSocketWriter?
     private var receiveTask: Task<Void, Never>?
     private var openGateTask: Task<Void, Never>?
-    private var converter: AVAudioConverter?
-    private var targetFormat: AVAudioFormat?
 
     private(set) var isRunning = false
 
@@ -276,7 +303,7 @@ final class MicrophoneStreamer {
         leadTimeMs: Int,
         useBluetoothMicrophone: Bool = false,
         onError: @escaping @MainActor (String) -> Void
-    ) throws {
+    ) async throws {
         stop()
 
         /*
@@ -293,9 +320,13 @@ final class MicrophoneStreamer {
                 ? .duplexBluetoothMic
                 : .duplexPhoneMicBluetoothOutput
         )
+        try await waitForUsableAudioRoute()
 
+        let engine = AVAudioEngine()
+        self.engine = engine
         self.socket = socket
-        self.socketWriter = PCMWebSocketWriter(socket: socket)
+        let socketWriter = PCMWebSocketWriter(socket: socket)
+        self.socketWriter = socketWriter
 
         sendErrorState.reset()
         sendGate.close()
@@ -321,12 +352,26 @@ final class MicrophoneStreamer {
         }
 
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.inputFormat(forBus: 0)
+        var inputFormat = inputNode.inputFormat(forBus: 0)
 
-        let targetFormat = AVAudioFormat(
+        // After a Bluetooth route transition RemoteIO can temporarily report
+        // a 0 Hz stream format. Give Core Audio a short time to settle before
+        // building the converter/tap.
+        for _ in 0 ..< 8 where inputFormat.sampleRate <= 1 || inputFormat.channelCount == 0 {
+            try await Task.sleep(for: .milliseconds(70))
+            inputFormat = inputNode.inputFormat(forBus: 0)
+        }
+
+        guard inputFormat.sampleRate > 1, inputFormat.channelCount > 0 else {
+            throw RadioAPIError.server("iOS microphone route is not ready.")
+        }
+
+        guard let targetFormat = AVAudioFormat(
             standardFormatWithSampleRate: targetRate,
             channels: 1
-        )!
+        ) else {
+            throw RadioAPIError.server("Unsupported TX audio format.")
+        }
 
         let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
 
@@ -337,17 +382,23 @@ final class MicrophoneStreamer {
             throw RadioAPIError.server("Unsupported iOS microphone format.")
         }
 
-        self.targetFormat = targetFormat
-        self.converter = converter
-
         inputNode.removeTap(onBus: 0)
 
+        // Capture the TX pipeline for this tap invocation. stop() can now
+        // tear down the current session without racing against mutable
+        // converter/format/socket properties read by the realtime callback.
         inputNode.installTap(
             onBus: 0,
             bufferSize: AVAudioFrameCount(max(256, processorSize)),
             format: inputFormat
-        ) { [weak self] buffer, _ in
-            self?.send(buffer: buffer, onError: onError)
+        ) { [weak self, socketWriter, targetFormat, converter] buffer, _ in
+            self?.send(
+                buffer: buffer,
+                targetFormat: targetFormat,
+                converter: converter,
+                socketWriter: socketWriter,
+                onError: onError
+            )
         }
 
         engine.prepare()
@@ -369,20 +420,24 @@ final class MicrophoneStreamer {
 
         sendGate.close()
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            engine.reset()
+        }
+        engine = nil
 
         if let currentSocket {
             Task {
-                try? await currentSocket.send(.string("stop"))
+                if currentSocket.state == .running {
+                    try? await currentSocket.send(.string("stop"))
+                }
                 currentSocket.cancel(with: .normalClosure, reason: nil)
             }
         }
 
         socket = nil
         socketWriter = nil
-        converter = nil
-        targetFormat = nil
 
         sendErrorState.reset()
         isRunning = false
@@ -390,10 +445,16 @@ final class MicrophoneStreamer {
 
     private func send(
         buffer: AVAudioPCMBuffer,
+        targetFormat: AVAudioFormat,
+        converter: AVAudioConverter?,
+        socketWriter: PCMWebSocketWriter,
         onError: @escaping @MainActor (String) -> Void
     ) {
-        guard let socketWriter else { return }
-        guard let samples = normalizedSamples(from: buffer) else { return }
+        guard let samples = normalizedSamples(
+            from: buffer,
+            targetFormat: targetFormat,
+            converter: converter
+        ) else { return }
 
         let payload = encodePCM16(samples)
         guard !payload.isEmpty else { return }
@@ -420,9 +481,11 @@ final class MicrophoneStreamer {
         }
     }
 
-    private func normalizedSamples(from buffer: AVAudioPCMBuffer) -> [Float]? {
-        guard let targetFormat else { return nil }
-
+    private func normalizedSamples(
+        from buffer: AVAudioPCMBuffer,
+        targetFormat: AVAudioFormat,
+        converter: AVAudioConverter?
+    ) -> [Float]? {
         /*
          Bug importante corretto:
          prima il codice bypassava il converter se il buffer era Float32 mono,
